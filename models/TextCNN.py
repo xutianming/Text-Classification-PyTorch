@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
+import time
 
 
 batch_size = 1
@@ -18,7 +18,7 @@ batch_size = 1
 # 模型参数
 model_name = 'TextCNN' # 模型名
 class_num = 49
-kernel_size = 5
+kernel_size = [5] * 4
 vocab_size = 100000
 embed_dim = 256 # 未使用预训练词向量的默认值
 
@@ -38,23 +38,36 @@ class ModelCNN(nn.Module):
             for channel_num, kernel_num, kernel_size in zip(channel_sizes[:-1], channel_sizes[1:], kernel_size)
         ])
 
-        dim = int(sum(channel_size[1:]))
-        # 全连接层
+        dim = int(sum(channel_sizes[1:]))
         self.classifer = torch.nn.Sequential(torch.nn.Linear(in_features=dim, out_features=dim),
             torch.nn.Tanh(),
             torch.nn.Linear(in_features=dim, out_features=2))
     
     def forward(self, x):
-        x = self.embedding(x).unsqueeze(1)
+        x = self.embedding(x).unsqueeze(0)
+        x = torch.transpose(x, 1, 2)
 
-        x = [F.relu(conv(x)).squeeze(3) for conv in self.convs] 
-        # 池化
-        x = [F.max_pool1d(i, i.size(2)).squeeze(2) for i in x] 
-        # flatten
-        x = torch.cat(x, 1) 
+        outputs = []
+        for conv in self.convs:
+            x = F.relu(conv(x))
+            outputs.append(x.max(2)[0])
+
+        x = torch.cat(outputs, dim=1)
         logits = [self.classifer(x) for i in range(class_num)]
-        return torch.cat(logits, dim=-1)
+        ret = torch.cat(logits, dim=-1)
+        return ret
 
 if __name__ == '__main__':
     model = ModelCNN()
-    ret = model.forward()
+    model.to(torch.device("cpu"))
+    data  = torch.LongTensor([i for i in range(150)])
+    ret = model.forward(data)
+    print(ret)
+    start = time.time()
+    for i in range(1000):
+        model(data)
+    print("Latency(ms):", time.time()-start)
+    with torch.autograd.profiler.profile(use_cuda=False, record_shapes=True) as prof:
+        model.forward(data)
+
+    print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=20))
